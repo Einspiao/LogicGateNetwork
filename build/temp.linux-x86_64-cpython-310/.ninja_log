@@ -1,0 +1,3 @@
+# ninja log v7
+2	21364	1756993745489209682	/home/wangshen/difflogic/build/temp.linux-x86_64-cpython-310/difflogic/cuda/difflogic.o	2d9acbfc3e39b151
+4	57446	1756993745489209682	/home/wangshen/difflogic/build/temp.linux-x86_64-cpython-310/difflogic/cuda/difflogic_kernel.o	394aed5c448395e9
