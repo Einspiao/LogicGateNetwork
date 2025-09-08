@@ -63,10 +63,22 @@ def bin_op(a, b, i):
 
 
 def bin_op_s(a, b, i_s):
+    # a, b shape: (batch_size, output_dim)
+    # i_s shape: (output_dim, 16)
     r = torch.zeros_like(a)
     for i in range(16):
         u = bin_op(a, b, i)
         r = r + i_s[..., i] * u
+    return r
+
+def bin_op_t(a, b, i_t, gate_seq):
+    # a, b, r shape: (batch_size, thickness, output_dim)
+    # i_t shape: (thickness, output_dim)
+    r = torch.zeros_like(a)
+    for i, gate_index in enumerate(gate_seq):
+        r[:, i, :] = bin_op(a[:, i, :], b[:, i, :], gate_index)
+    r = torch.sum(r * i_t, dim=1) # i_t automatically broadcasted to r.shape
+    # r shape: (batch_size, output_dim)
     return r
 
 

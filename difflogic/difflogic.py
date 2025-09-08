@@ -1,7 +1,7 @@
 import torch
 import difflogic_cuda
 import numpy as np
-from .functional import bin_op_s, get_unique_connections, GradFactor
+from .functional import bin_op_s, get_unique_connections, GradFactor, bin_op_t
 from .packbitstensor import PackBitsTensor
 
 
@@ -16,6 +16,7 @@ class LogicLayer(torch.nn.Module):
             self,
             in_dim: int,
             out_dim: int,
+            gate_sequence: list = [1, 3, 5, 7],
             device: str = 'cuda',
             grad_factor: float = 1.,
             implementation: str = None,
@@ -30,11 +31,14 @@ class LogicLayer(torch.nn.Module):
         :param connections: method for initializing the connectivity of the logic gate net
         """
         super().__init__()
-        self.weights = torch.nn.parameter.Parameter(torch.randn(out_dim, 16, device=device))
         self.in_dim = in_dim
         self.out_dim = out_dim
+        self.gate_sequence = gate_sequence  # specify the gates as labelled in bin_op
+        self.thickness = len(self.gate_sequence)
         self.device = device
         self.grad_factor = grad_factor
+        # self.weights = torch.nn.parameter.Parameter(torch.randn(out_dim, 16, device=device))
+        self.weights = torch.nn.parameter.Parameter(torch.randn([self.thickness, out_dim], device=device))
 
         """
         The CUDA implementation is the fast implementation. As the name implies, the cuda implementation is only 
@@ -72,6 +76,7 @@ class LogicLayer(torch.nn.Module):
         self.num_weights = out_dim
 
     def forward(self, x):
+        # x shape: (batch_size, data_size), e.g. (100, 400)
         if isinstance(x, PackBitsTensor):
             assert not self.training, 'PackBitsTensor is not supported for the differentiable training mode.'
             assert self.device == 'cuda', 'PackBitsTensor is only supported for CUDA, not for {}. ' \
@@ -95,16 +100,18 @@ class LogicLayer(torch.nn.Module):
         assert x.shape[-1] == self.in_dim, (x[0].shape[-1], self.in_dim)
 
         if self.indices[0].dtype == torch.int64 or self.indices[1].dtype == torch.int64:
-            print(self.indices[0].dtype, self.indices[1].dtype)
+            # print(self.indices[0].dtype, self.indices[1].dtype)
             self.indices = self.indices[0].long(), self.indices[1].long()
-            print(self.indices[0].dtype, self.indices[1].dtype)
+            # print(self.indices[0].dtype, self.indices[1].dtype)
 
         a, b = x[..., self.indices[0]], x[..., self.indices[1]]
-        if self.training:
-            x = bin_op_s(a, b, torch.nn.functional.softmax(self.weights, dim=-1))
-        else:
-            weights = torch.nn.functional.one_hot(self.weights.argmax(-1), 16).to(torch.float32)
-            x = bin_op_s(a, b, weights)
+        # a, b shape: (batch_size, thickness, output_size)
+        x = bin_op_t(a, b, torch.nn.functional.softmax(self.weights, dim=0), self.gate_sequence)
+        # if self.training:
+        #     x = bin_op_s(a, b, torch.nn.functional.softmax(self.weights, dim=-1))
+        # else:
+        #     weights = torch.nn.functional.one_hot(self.weights.argmax(-1), 16).to(torch.float32)
+        #     x = bin_op_s(a, b, weights)
         return x
 
     def forward_cuda(self, x):
@@ -156,13 +163,25 @@ class LogicLayer(torch.nn.Module):
                                                 'number of inputs ({}) because otherwise not all inputs could be ' \
                                                 'used or considered.'.format(self.out_dim, self.in_dim)
         if connections == 'random':
-            c = torch.randperm(2 * self.out_dim) % self.in_dim
-            c = torch.randperm(self.in_dim)[c]
-            c = c.reshape(2, self.out_dim)
-            a, b = c[0], c[1]
-            a, b = a.to(torch.int64), b.to(torch.int64)
+            perm2 = torch.argsort(torch.rand(self.thickness, 2 * self.out_dim, device=device), dim=-1)
+            c = perm2 % self.in_dim
+            # c shape: (self.thickness, 2 * self.out_dim)
+            perm_in = torch.argsort(torch.rand(self.thickness, self.in_dim, device=device), dim=-1)
+            c = torch.gather(perm_in, 1, c)
+            c = c.view(self.thickness, 2, self.out_dim)
+            # c shape: (self.thickness, 2, self.out_dim)
+            a, b = c[:, 0, :].to(torch.int64), c[:, 1, :].to(torch.int64)
             a, b = a.to(device), b.to(device)
+            # a, b shape: (self.thickness, self.out_dim)
             return a, b
+
+            # c = torch.randperm(2 * self.out_dim) % self.in_dim
+            # c = torch.randperm(self.in_dim)[c]
+            # c = c.reshape(2, self.out_dim)
+            # a, b = c[0], c[1]
+            # a, b = a.to(torch.int64), b.to(torch.int64)
+            # a, b = a.to(device), b.to(device)
+            # return a, b
         elif connections == 'unique':
             return get_unique_connections(self.in_dim, self.out_dim, device)
         else:
